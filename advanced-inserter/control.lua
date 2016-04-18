@@ -362,7 +362,7 @@ function setup_reader (ent, cindex)
 		force = game.player.force
 	})
 	
-	reader.destructible = falsea
+	reader.destructible = false
 
 	ent.facade.connect_neighbour({
 		wire = defines.circuitconnector.red,
