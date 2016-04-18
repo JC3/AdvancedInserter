@@ -3,7 +3,7 @@
 advanced-inserter 0.1.0, 2016-apr-18
 
 This provides an inserter whose filters are controllable by the circuit network. See the 
-forum post (todo add link here) for purpose and usage details.
+forum post https://forums.factorio.com/viewtopic.php?f=93&t=23871 for purpose and usage details.
 
 The way this works is relatively straightforward but it does contain a bunch of hacks.
 There are three entity types involved here:
