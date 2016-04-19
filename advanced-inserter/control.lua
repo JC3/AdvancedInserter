@@ -1,19 +1,21 @@
 --[[
 
-advanced-inserter 0.1.0, 2016-apr-18
+advanced-inserter 0.2.0, 2016-apr-18
+
+  0.1.0 - Initial release.
+  0.2.0 - Significantly simplified code with new knowledge that circuit conditions are 
+          evaluated immediately instead of having to wait a tick. Removed all the hidden
+		  lamps and the advanced-inserter-lamp prototype. See previous revision for old
+		  explanations.
 
 This provides an inserter whose filters are controllable by the circuit network. See the 
 forum post https://forums.factorio.com/viewtopic.php?f=93&t=23871 for purpose and usage details.
 
-The way this works is relatively straightforward but it does contain a bunch of hacks.
-There are three entity types involved here:
+The way this works is relatively straightforward but it does contain a few hacks.
+There are two entity types involved here:
 
 advanced-inserter: This is an actual inserter. It appears on the map. It is the item that
 the player places, and it does the work.
-
-advanced-inserter-lamp: There is one of these lamps per filter slot. They are used to read
-circuit network conditions. Their conditions are set appropriately, then they are evaluated
-and the advanced-inserter's corresponding filter slot is set/unset.
 
 advanced-inserter-facade: This is what the user interacts with. It provides the GUI for
 setting the items that the inserter will be able to move.
@@ -21,18 +23,16 @@ setting the items that the inserter will be able to move.
 The various hurdles encountered, and reasons for the way this is done, in no specific order,
 are:
 
-  - Inexplicably, there is no API for reading circuit network signals. So we use lamps. They're as 
-    good as anything else. Each one gets an individual signal to check (as its circuit condition)
-	then we can evaluate the signal to see if its > 0 (or whatever). AFAIK there is no other
-	way to evaluate multiple signals, at least not in one tick.
+  - Inexplicably, there is no API for reading circuit network signals (but there will be in 0.13,
+    so I hear!). So we temporarily set various circuit conditions on the real inserter (use the 
+	real one not the facade so it isn't visible to the player) to read circuit state.
 	
   - There is no API for easily controlling what an inserter inserts, so we use its filter
     slots.
 	
-  - Because we have to use lamps (or some other entity) to evaluate individual signals, we
-    can't really create a lamp for every signal in the game. We don't even know them, because 
-	there may be other mods, etc. That means the user has to provide a specific set of signals
-	to look for. Which means we need a GUI to do that...
+  - Because we have to evaluate individual signals, I'm a bit worried about the performance of
+    checking every single signal in the game. That means the user has to provide a specific set 
+	of signals to look for (which is handy anyways). Which means we need a GUI to do that...
 	
   - We can't use the advanced-inserter's GUI because we're already programmatically controlling
     its filter slots to control its behavior, so we have to use something else (unless we use only
@@ -65,7 +65,7 @@ player has to interact with in order to provide a functioning settings GUI. So w
 of things to make this at least somewhat transparent, including:
 
   - Player builds an advanced-inserter, but mines the facade. So mining the facade has to destroy
-    the real inserter and lamps and stuff and return an advanced-inserter to the inventory.
+    the real inserter and return an advanced-inserter to the inventory.
 	
   - Player can only connect circuit wires to facade, so we have to wire all our other stuff to
     that to interface with the player's circuit network.
@@ -85,7 +85,7 @@ of things to make this at least somewhat transparent, including:
 I have no idea what strange bugs might be lurking in here. There are things that I do know about
 that I can't really do anything about. See forum post for up-to-date info but, at least:
 
-  - Electricity usage stats are weird. A bunch of lamps and smart inserters are added to the power
+  - Electricity usage stats are weird. A bunch of smart inserters (the facades) are added to the power
     consumption chart counts, although generally they'll be so low on the list as to not matter.
 	
   - Related, the mouse-over power info is totally borked since its for the facade not the real 
@@ -127,6 +127,14 @@ function debugDump(var, force)
   end
 end
 
+
+--[[
+Vanilla initialization function, called by script.on_init.
+
+Postconditions:
+
+  - global.ents is not null.
+--]]
 
 function init ()
 
@@ -224,69 +232,22 @@ end
 
 
 --[[
-Update the lamps' network conditions to match the facade's filter settings. There is one lamp 
-per filter slot, and each lamp's condition is set to that item > 0. Then later we can check if 
-each lamp's condition is fulfilled and control the real inserter's filters based on that.
+Updates the real inserter's filter slots to match the circuit network signal states for 
+the filters that the player set on the facade. This is done by temporarily setting the
+circuit condition on ent.inserter then reading it back to get the circuit network state.
+This is how we enable/disable specific items from circuit network conditions.
 
 Preconditions:
 
-  - ent.facade is set
-  - ent.readers is an array with indices 1 through 5, each set to a lamp
-  
-Postconditions:
-
-  - Each ent.readers condition set to match each ent.facade filter slot.
-
-This is called every tick.
---]]
-
-function sync_readers (ent) 
-	
-	for i = 1,5 do
-
-		local newitem = ent.facade.get_filter(i)
-		local curcond = ent.readers[i].get_circuit_condition(defines.circuitconditionindex.lamp)
-		local curitem
-
-		if is_condition_set(curcond) then
-			curitem = curcond.condition.first_signal.name
-		else
-			curitem = nil
-		end
-
-		if curitem ~= newitem then
-			local newcond
-			if newitem then
-				newcond = {condition={
-					comparator = ">",   -- change this to < if you prefer
-					constant = 0,
-					first_signal = { type="item", name=newitem }
-				}}
-			else
-				newcond = nil
-			end
-			ent.readers[i].set_circuit_condition(defines.circuitconditionindex.lamp, newcond)
-			debugDump("filter "..i.." has changed")
-		end
-
-	end
-	
-end
-
-
---[[
-Updates the real inserter's filter slots to match each lamps' circuit condition fulfillment
-state. This is how we enable/disable specific items from circuit network conditions.
-
-Preconditions:
-
-  - ent.readers is set up and circuit conditions have been set
-  - ent.inserter has been set
+  - ent.facade has been set up
+  - ent.inserter has been set up
+  - ent.facade's filters are whatever the player wants
   
 Postconditions:
 
   - ent.inserter's filter slots have been set to match network conditions.
-  
+  - however, ent.inserter's circuit network condition is left in an undefined state.
+ 
 Returns:
 
   - True if this inserter has things to move, false if it is idle. This is later passed to
@@ -299,20 +260,30 @@ function update_filters (ent)
 
 	local busy = false
 
-	for i = 1,5 do
+	for i = 1,5 do -- 5 filter slots
 	
-		local cond = ent.readers[i].get_circuit_condition(defines.circuitconditionindex.lamp)
+		local item = ent.facade.get_filter(i)
+
+		-- basically, we go through each user-set filter in ent.facade ...
+		if item then
+
+			local cond = {condition={
+				comparator = ">",   -- change this to < if you prefer
+				constant = 0,
+				first_signal = { type="item", name=item }
+			}}
 		
-		-- get the item name from the condition, nil if nothing to move. this is what the
-		-- lamps are for, as something to evaluate specific signals for us.
-		local item
-		if is_condition_set(cond) and cond.fulfilled then
-			item = cond.condition.first_signal.name
-		else
-			item = nil
+			-- ... temporarily set the inserter's circuit condition to get the circuit network state ...
+			ent.inserter.set_circuit_condition(defines.circuitconditionindex.inserter_circuit, cond)
+			cond = ent.inserter.get_circuit_condition(defines.circuitconditionindex.inserter_circuit)
+			
+			if not cond.fulfilled then
+				item = nil
+			end
+		
 		end
 		
-		-- now use the inserter's filters to enable/disable this item
+		-- ... then copy the filter through to the real inserter if the condition is fulfilled
 		if item then
 			ent.inserter.set_filter(item, i)
 			busy = true
@@ -328,53 +299,6 @@ function update_filters (ent)
 	-- but then the inserter stops in mid-swing and i don't like it).
 	-- ent.inserter.active = busy
 	return busy
-
-end
-
-
---[[
-Set up one of the lamps used to read the circuit network signals. I called them "readers"
-because I was experimenting with different entities before settling on lamps. cindex is the
-slot number and is only really used for setting the position offset during debugging.
-
-Each lamp is connected to the facade with a red and a green wire. The player will be wiring
-circuit networks to the facade so this is how the lamps connect.
-
-The advanced-inserter-lamp is just a regular small-lamp but with an empty sprite.
-
-Preconditions:
-
-  - ent.inserter has been set
-  - ent.facade has been set
-  
-Returns:
-
-  - A new lamp.
-
-This is called when building a new advanced-inserter.  
---]]
-
-function setup_reader (ent, cindex)
-
-	local reader = ent.inserter.surface.create_entity({
-		name = "advanced-inserter-lamp", 
-		position = offset(ent.inserter.position, cindex - 3, 2),
-		force = game.player.force
-	})
-	
-	reader.destructible = falsea
-
-	ent.facade.connect_neighbour({
-		wire = defines.circuitconnector.red,
-		target_entity = reader
-	})
-
-	ent.facade.connect_neighbour({
-		wire = defines.circuitconnector.green,
-		target_entity = reader
-	})
-
-	return reader
 
 end
 
@@ -436,7 +360,8 @@ Update the inserter's state. This does everything.
 
 Preconditions:
 
-  - ent.inserter, ent.facade, and ent.readers are completely ready to go.
+  - ent.inserter has been set up.
+  - ent.facade has been set up.
   
 Postconditions:
 
@@ -447,9 +372,8 @@ This is called every tick, and also right after setting everything up when build
 
 function do_update (ent) 
 
-	sync_readers(ent)
-	local busy = update_filters(ent)
-	sync_network_conditions(ent, not busy)
+	local busy = update_filters(ent)		-- ...leaves ent.inserter's circuit conditions in an undefined state
+	sync_network_conditions(ent, not busy)  -- ...but this will restore them to what they should be
 	
 end
 
@@ -463,18 +387,12 @@ Postconditions:
   - A new, fully-initialized entry has been added to global.ent.
 --]]
 
-function do_build (entity) 
+function do_build (entity)
 
 	local ent = {}
 	ent.inserter = entity
 	ent.inserter.destructible = false -- all interaction with world must be done through facade
 	ent.facade = setup_facade(entity)
-	ent.readers = {}
-	ent.readers[1] = setup_reader(ent, 1)
-	ent.readers[2] = setup_reader(ent, 2)
-	ent.readers[3] = setup_reader(ent, 3)
-	ent.readers[4] = setup_reader(ent, 4)
-	ent.readers[5] = setup_reader(ent, 5)
 
 	-- this doesn't *really* need to be done here, given defaults, but it makes me feel good
 	do_update(ent)
@@ -486,34 +404,12 @@ end
 
 
 --[[
-Destroy all objects except the facade, which is already being destroyed by the game. 
-
-Postconditions:
-
-  - The lamps in ent.readers have been destroyed.
-  - The ent.inserter has been destroyed.
-  
-This is called when the facade is mined or otherwise destroyed.
---]]
-
-function do_destroy_by_facade (ent)
-
-	for i,r in ipairs(ent.readers) do
-		r.destroy()
-	end
-	
-	ent.inserter.destroy()
-	
-end
-
-
---[[
 Given an advanced-inserter-facade, destroy the other associated objects and remove the
-entry from global.ents.
+entry from global.ents. The facade itself is already being destroyed by the game.
 
 Postconditions:
 
-  - do_destroy_by_facade has been called on the associated global.ents entry.
+  - The ent.inserter has been destroyed.
   - The entry has been removed from global.ents.
 
 This is called when the facade is mined or otherwise destroyed.
@@ -521,9 +417,9 @@ This is called when the facade is mined or otherwise destroyed.
 
 function do_remove_by_facade (entity)
 
-	for i,e in ipairs(global.ents) do
-		if (e.facade == entity) then
-			do_destroy_by_facade(e)
+	for i,ent in ipairs(global.ents) do
+		if (ent.facade == entity) then
+			ent.inserter.destroy()
 			table.remove(global.ents, i)
 			debugDump("Removed advanced inserter, now there are " .. #global.ents)
 			break
@@ -589,14 +485,39 @@ script.on_event(defines.events.on_tick, function(event)
 	end
 end)
 
+
+-- version updates ------------------------------------------------------------
+
 script.on_configuration_changed(function(data)
-	-- only use right now is to enable the recipe if advanced-electronics already researched.
-	if data.mod_changes ~= nil and data.mod_changes["advanced-inserter"] ~= nil and data.mod_changes["advanced-inserter"].old_version == nil then
-		for i, player in ipairs(game.players) do 
-			if player.force.technologies["advanced-electronics"].researched then 
-				player.force.recipes["advanced-inserter"].enabled = true
-				debugDump("Mod installed; Advanced electronics researched, enabling Advanced Inserter.")
+
+	if data.mod_changes ~= nil and data.mod_changes["advanced-inserter"] ~= nil then
+	
+		local oldv = data.mod_changes["advanced-inserter"].old_version
+		local curv = data.mod_changes["advanced-inserter"].new_version
+	
+		-- enable if tech already researched
+		if oldv == nil then
+			for i, player in ipairs(game.players) do 
+				if player.force.technologies["advanced-electronics"].researched then 
+					player.force.recipes["advanced-inserter"].enabled = true
+					debugDump("advanced-inserter: Advanced Electronics researched, enabling Advanced Inserter.", true)
+				end
 			end
 		end
+		
+		-- [0.2.0]: 0.1.0 to any newer version update
+		if oldv == "0.1.0" and curv ~= "0.1.0" then
+			local readers = 0
+			for i,ent in ipairs(global.ents) do
+				for j,r in ipairs(ent.readers) do
+					-- r.destroy() -- game has already destroyed it since advanced-inserter-lamp disappeared
+					readers = readers + 1
+				end
+				ent.readers = nil
+			end
+			debugDump("advanced-inserter: Migrate from 0.1.0, updated "..#global.ents.." entities, removed "..readers.." reader references.", true)
+		end
+		
 	end
+	
 end)
