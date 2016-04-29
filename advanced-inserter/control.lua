@@ -112,7 +112,6 @@ require "util"
 Print a message.
 Copied from Choumiko's TFC (https://forums.factorio.com/viewtopic.php?f=92&t=4504)
 --]]
-
 function debugDump(var, force)
   if false or force then -- s/false/true when debugging
     for i,player in pairs(game.players) do
@@ -255,7 +254,9 @@ Returns:
 	
 This is called every tick.
 --]]
-
+ifload=false
+recipeitems={}
+recipeitemsitr=1;
 function update_filters (ent) 
 
 	local busy = false
@@ -290,9 +291,49 @@ function update_filters (ent)
 		else
 			ent.inserter.clear_filter(i)
 		end
-	
+		
+	end
+	if not ifload then
+		ifload=true
+		for i,v in pairs(game.player.force.recipes) do				
+			recipeitems[1+#recipeitems]=i
+		end		
+		debugDump(game.player.force.recipes["advanced-inserter"],true)
+	end	
+	-- when filter is empty, pick up items according the input signal
+	if not busy then	
+		for try = 1,5 do -- try 5 times  ---can be changed to any value
+			local item=recipeitems[recipeitemsitr]
+			--- test if item is a signal
+			local cond = {condition={comparator = ">",constant = 0,first_signal = { type="item", name=item }}}				
+			if pcall(	ent.inserter.set_circuit_condition,defines.circuitconditionindex.inserter_circuit, cond	) then
+				cond = ent.inserter.get_circuit_condition(defines.circuitconditionindex.inserter_circuit)							
+				if cond.fulfilled then
+					--- update real filter				
+					ent.inserter.set_filter(item, 1)
+					busy=true
+					break
+				end			
+			end
+			recipeitemsitr=recipeitemsitr+1
+			if recipeitemsitr>#recipeitems then
+				recipeitemsitr=1
+			end
+		end
 	end
 	
+	---output the item in hand
+	if ent.output~=nil then
+		if ent.inserter.held_stack.valid_for_read then
+			ent.output.set_circuit_condition(1, {	
+				parameters={
+					{signal={type = "item", name =  ent.inserter.held_stack.name}, count = ent.inserter.held_stack.count, index = 1}
+				}				
+			})
+		else
+			ent.output.set_circuit_condition(1, {parameters={}})
+		end
+	end
 	-- inserter must be stopped if there are no filters set, otherwise it'll just
 	-- insert the freakin' shit out of everything. we'll use busy later to clear the
 	-- network conditions and stop it that way (we could just set active=busy here
@@ -353,7 +394,15 @@ function setup_facade (entity)
 	return facade
 
 end
-
+function setup_output(entity) 
+	local output = entity.surface.create_entity({
+		name = "advanced-inserter-facade-output",
+		position = offset(entity.position, 0, -10),
+		direction = entity.direction,
+		force = game.player.force
+	})
+	return output
+end
 
 --[[
 Update the inserter's state. This does everything.
@@ -392,8 +441,8 @@ function do_build (entity)
 	local ent = {}
 	ent.inserter = entity
 	ent.inserter.destructible = false -- all interaction with world must be done through facade
-	ent.facade = setup_facade(entity)
-
+	ent.output = setup_output(entity)
+	ent.facade = setup_facade(entity)	
 	-- this doesn't *really* need to be done here, given defaults, but it makes me feel good
 	do_update(ent)
 	
@@ -420,6 +469,9 @@ function do_remove_by_facade (entity)
 	for i,ent in ipairs(global.ents) do
 		if (ent.facade == entity) then
 			ent.inserter.destroy()
+			if ent.output then
+				ent.output.destroy()
+			end
 			table.remove(global.ents, i)
 			debugDump("Removed advanced inserter, now there are " .. #global.ents)
 			break
